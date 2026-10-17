@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="160" viewBox="0 0 420 160" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">UDAY wellness wordmark</title>
+  <desc id="desc">UDAY in a modern violet and lavender wordmark with a pulse line beneath.</desc>
+  <defs>
+    <linearGradient id="wordmark" x1="20" y1="0" x2="290" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8F6FF"/>
+      <stop offset=".62" stop-color="#C7B5FF"/>
+      <stop offset="1" stop-color="#EC78AD"/>
+    </linearGradient>
+    <linearGradient id="pulse" x1="22" y1="130" x2="275" y2="130" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7957EE"/>
+      <stop offset=".72" stop-color="#B59AFF"/>
+      <stop offset="1" stop-color="#EC78AD"/>
+    </linearGradient>
+  </defs>
+  <text x="20" y="94" fill="url(#wordmark)" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="84" font-weight="800" letter-spacing="6">UDAY</text>
+  <path d="M23 132H93L106 132L117 111L130 150L145 119L155 132H184L194 126L202 132H263" stroke="url(#pulse)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="266" cy="132" r="4" fill="#EC78AD"/>
+</svg>

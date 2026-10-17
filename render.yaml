@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: uday-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt && python -m nltk.downloader vader_lexicon
+    startCommand: python -c "from config import validate_deployment_environment; validate_deployment_environment(); from database import initialize_database; initialize_database()" && uvicorn api:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: UDAY_REQUIRE_DATABASE
+        value: "1"
+      - key: GEMINI_MODEL
+        value: gemini-3.6-flash
+  - type: web
+    name: uday-ui
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run streamlit_app.py --server.address 0.0.0.0 --server.port $PORT
+    envVars:
+      - key: UDAY_API_URL
+        fromService:
+          type: web
+          name: uday-api
+          envVarKey: RENDER_EXTERNAL_URL
