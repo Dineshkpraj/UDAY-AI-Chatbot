@@ -1,232 +1,237 @@
-# UDAY — Render Deployment Guide
+# UDAY
 
-UDAY is a mental-wellness companion with a Streamlit interface, a FastAPI API, Neon PostgreSQL storage, and Gemini-generated replies. This guide explains how to deploy the project to Render with the `render.yaml` Blueprint in this repository.
+**A personal wellness companion for reflection, supportive conversation, and guided self-check-ins.**
 
-> **Important:** UDAY is a prototype, not a medical device, clinician, diagnosis, treatment, or emergency service. The included Blueprint uses Render Free web services for a demo or evaluation. Render says Free instances are not for production use; they may sleep and their local files are ephemeral. Do not use this setup for a public clinical service or rely on it for urgent support. Read Render's current [Free instance limits](https://render.com/docs/free).
+UDAY combines a Streamlit web interface with a FastAPI service. It uses Google Gemini to generate conversational responses, PostgreSQL or SQLite for user data, VADER for lightweight mood signals, and a guided GAD-7 screening flow.
 
-## What gets deployed
+> **Wellness and safety notice:** UDAY is an educational prototype. It is not medical care, a diagnosis, treatment, or an emergency service. The GAD-7 flow is a screening aid, not a diagnosis. The keyword-based crisis safeguard can miss context and must not be relied on for risk assessment. If someone is in immediate danger, contact local emergency services or a qualified crisis service.
 
-The Blueprint creates two Render services:
+## Contents
 
-| Service | What it runs | Example URL |
-| --- | --- | --- |
-| `uday-api` | FastAPI authentication, chat, screening, memory, and data endpoints | `https://<api-service>.onrender.com` |
-| `uday-ui` | The Streamlit app people use | `https://<ui-service>.onrender.com` |
+- [Features](#features)
+- [How the application is structured](#how-the-application-is-structured)
+- [Technology](#technology)
+- [Run locally](#run-locally)
+- [Configuration](#configuration)
+- [Deploy to Render](#deploy-to-render)
+- [Data and privacy](#data-and-privacy)
+- [Verification](#verification)
+- [Project layout](#project-layout)
+- [Known limitations](#known-limitations)
 
-The API stores data in Neon PostgreSQL. Render wires the UI's `UDAY_API_URL` to the API's public URL. The API's start command checks its required settings and initializes the schema before starting Uvicorn; Render checks `/health` after deploy.
+## Features
 
-## What you need
+- **Supportive chat:** Streamlit chat interface backed by a FastAPI API and Gemini text generation.
+- **Accounts and sessions:** Validated registration, Argon2 password hashing, OAuth2 password flow, and JWT access tokens that expire after 15 minutes.
+- **Screening when wanted:** Users can start or restart the optional GAD-7 screening from the sidebar at any time. UDAY can also offer it after messages containing selected anxiety or stress terms. New users may receive a one-time invitation.
+- **User-controlled memories:** Users can review, edit, add, and delete saved memory facts used for personalization.
+- **Mood signals:** VADER creates heuristic sentiment scores. Scores are not clinical measurements.
+- **Privacy controls:** Users can export account data, clear chat history, delete mood scores, manage memories, or delete their account and linked records.
+- **Persistent storage:** Neon PostgreSQL is intended for hosted deployments; SQLite is available for local development.
+- **API documentation:** FastAPI interactive documentation is available at `/docs`.
 
-Before starting, have:
+## How the application is structured
 
-- The UDAY project in a GitHub repository, with `render.yaml` at its root.
-- A Render account connected to GitHub.
-- A Neon PostgreSQL project and its connection URI.
-- A Gemini API key.
-
-### Check the Gemini model setting
-
-The local default in `config.py` is `gemini-3.5-flash`; the Render Blueprint in `render.yaml` overrides it with `gemini-3.6-flash`. Google's current documentation marks 3.5 deprecated and automatically routes it to 3.6; 3.6 is listed as a stable model. If you choose another model, update `GEMINI_MODEL` in `render.yaml` and, if you want the same model locally, `DEFAULT_MODEL_NAME` in `config.py`; then commit and push the change before deploying. A model must be enabled for the Google account associated with your key. See Google's [current stable model list](https://ai.google.dev/gemini-api/docs/models), [Gemini 3.6 Flash status](https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash), and [deprecation information](https://ai.google.dev/gemini-api/docs/deprecations).
-
-## Step 1 — Prepare and push the repository
-
-1. Confirm `render.yaml` is in the project root alongside `api.py`, `streamlit_app.py`, and `requirements.txt`.
-2. Confirm your `.env` file is not committed. The project's `.gitignore` excludes `.env`, `.neon`, virtual environments, and local database files.
-3. Do not put passwords, API keys, database URLs, or JWT secrets in source files, `render.yaml`, README text, screenshots, or public GitHub issues.
-4. Commit and push the project to GitHub. Render deploys the branch you connect in the next step.
-
-If you want to check the project locally first, see [Local checks](#local-checks).
-
-## Step 2 — Get the Neon connection URI
-
-1. Open the Neon project in the Neon Console.
-2. Open the connection details for the branch and database UDAY should use.
-3. Choose the pooled connection option and copy the complete PostgreSQL URI. Neon describes how to find it in [Connect from any application](https://neon.com/docs/connect/connect-from-any-app).
-4. Treat the URI as a password: do not paste it into source control or a public message.
-
-Use the Neon production branch for the live Render service. For testing schema changes with real-like data, use a separate Neon branch/database. UDAY initializes and upgrades tables on API startup, so do not point a test deploy at a database whose contents you cannot risk changing.
-
-## Step 3 — Get a Gemini API key
-
-1. Create or select a Google project with Gemini API access.
-2. Create/copy its Gemini API key using Google's developer tooling.
-3. Confirm the model selected in `GEMINI_MODEL` is available to that key.
-4. Keep the key private. It belongs in Render's API service environment only.
-
-Chat text and relevant, user-reviewed memory facts are sent to Gemini to generate a reply. Profile fields such as the user's name, age, gender, and focus area are not included in the Gemini prompt. Review Google's current API terms and data handling before using real personal data.
-
-## Step 4 — Create the Render Blueprint
-
-1. Sign in to the [Render Dashboard](https://dashboard.render.com/).
-2. Select **New** → **Blueprint**.
-3. Connect the GitHub repository containing UDAY.
-4. Select the branch you pushed in Step 1.
-5. Confirm the Blueprint path is `render.yaml` (the default when it is at the repository root).
-6. Review the resources Render plans to create. You should see `uday-api` and `uday-ui`, both Python web services.
-7. During initial setup, enter the prompted secret values:
-   - `DATABASE_URL`: the Neon pooled PostgreSQL URI from Step 2.
-   - `GEMINI_API_KEY`: the key from Step 3.
-8. Review the Blueprint and select **Deploy Blueprint**.
-
-Render's [Blueprint guide](https://render.com/docs/infrastructure-as-code) explains connecting a repository. Its [Blueprint YAML reference](https://render.com/docs/blueprint-spec) describes generated secrets, prompted secrets, and service references.
-
-The Blueprint automatically:
-
-- Generates `JWT_SECRET_KEY` for the API.
-- Sets `UDAY_REQUIRE_DATABASE=1`, so the hosted API will not silently fall back to ephemeral SQLite.
-- Sets `GEMINI_MODEL=gemini-3.6-flash` (the current value in `render.yaml`).
-- Installs the NLTK VADER lexicon during the API build.
-- Checks required settings and initializes the database before starting the API.
-- Connects the UI's `UDAY_API_URL` to the API's `RENDER_EXTERNAL_URL`.
-
-> **If these Render services already exist:** Render prompts for `sync: false` secrets during initial Blueprint creation. For an existing Blueprint, add or replace those values on the relevant service's **Environment** page, then redeploy. Do not add the secret values to YAML.
-
-## Step 5 — Verify the Render environment settings
-
-Open **uday-api** → **Environment** in the Render Dashboard and confirm:
-
-| Variable | Expected value |
-| --- | --- |
-| `DATABASE_URL` | The full Neon pooled PostgreSQL URI |
-| `GEMINI_API_KEY` | Your Gemini API key |
-| `JWT_SECRET_KEY` | A generated, private random value of at least 32 characters |
-| `UDAY_REQUIRE_DATABASE` | `1` |
-| `GEMINI_MODEL` | `gemini-3.6-flash` in the current Blueprint; use a model ID available to your Gemini API key |
-
-Open **uday-ui** → **Environment** and confirm `UDAY_API_URL` refers to the API's public Render URL. The Blueprint sets this service reference for you. Do not put the Neon URI or Gemini API key on the UI service.
-
-If a required value is missing or Neon cannot be reached, the API's start or health check will fail rather than switching to local SQLite.
-
-## Step 6 — Wait for deployment and open the app
-
-1. In Render, open **Events** or **Deploys** and wait for both services to show a successful deployment.
-2. Open the API URL followed by `/health`, for example:
-
-   ```text
-   https://<api-service>.onrender.com/health
-   ```
-
-   A healthy API returns:
-
-   ```json
-   {"status":"ok"}
-   ```
-
-3. To view the FastAPI interactive docs, open the API URL followed by `/docs`:
-
-   ```text
-   https://<api-service>.onrender.com/docs
-   ```
-
-4. In the Render Dashboard, open **uday-ui** and select its public URL. This is the link to share for the web interface.
-
-## Step 7 — Test with a disposable account
-
-Use a test account and non-sensitive test messages:
-
-1. Create an account. Registration is restricted to adults aged 18 or older, requires a password of at least 12 characters, and requires acceptance of the data-use notice.
-2. Sign in and send a short test message. Confirm the app receives a response.
-3. Add a saved memory, edit it, and delete it.
-4. Check the sidebar data controls: export data, clear chat history, and delete mood scores.
-5. If you want to check account deletion, use only the disposable test account. Account deletion permanently deletes that account and its linked data.
-6. Recheck the API `/health` URL.
-
-The API returns 429 when a user exceeds a request limit: 30 chats per account per minute, 10 login attempts per IP/account per 15 minutes, and 5 registrations per IP per hour. Do not use real mental-health information during initial testing.
-
-## Troubleshooting
-
-| Symptom | What to check |
-| --- | --- |
-| API deploy fails before it starts | Check API logs and confirm `DATABASE_URL`, `GEMINI_API_KEY`, and generated `JWT_SECRET_KEY` exist. Confirm `UDAY_REQUIRE_DATABASE` is `1`. |
-| `/health` fails with a database error | Re-copy the Neon pooled URI, verify its branch/database and credentials, and retain all query parameters. Avoid extra quotes or spaces. |
-| Streamlit opens but cannot reach the API | Confirm the UI's `UDAY_API_URL` points to the API's public URL, not the UI URL or a private host. Then redeploy the UI service. |
-| Chat says the AI service is unavailable | Check API logs; verify the Gemini key, model availability, API access, quota, and billing/usage limits for the Google project. |
-| Registration returns HTTP 422 | Check valid email, age 18+, non-empty profile fields, password length of at least 12, and privacy consent. |
-| Login returns HTTP 401 | Check the email and password. Profiles created before API password support may not have a password hash and cannot log in until a password-recovery/migration flow is provided. |
-| Initial load is slow after inactivity | Render Free web services can sleep after 15 minutes without inbound traffic; waking may take about a minute. See the current [Free instance limits](https://render.com/docs/free). |
-
-If deployment fails, inspect the first error in the relevant service's **Logs**. Never include a full database URI or API key in a public support request.
-
-## Database setup and existing data
-
-The API creates missing UDAY tables and adds the privacy-consent fields to an existing `users` table. It also creates tables for per-user screening state and rate-limit buckets. These schema upgrades are additive; they do not drop the existing UDAY tables. Do not delete your Neon project or branch to troubleshoot a failed deploy. Correct the connection/configuration issue and redeploy.
-
-Sign-in uses OAuth2 password credentials and JWT bearer tokens. Each access token expires after 15 minutes, after which the user must sign in again. Changing `JWT_SECRET_KEY` invalidates all existing access tokens.
-
-Render's filesystem is ephemeral, so hosted SQLite would lose data on restarts, redeploys, or sleep. This Blueprint requires PostgreSQL and uses Neon. Per account, UDAY retains at most the latest 500 chat messages; up to 80 messages may be included as Gemini context. New mood entries store a VADER score without a text excerpt. Older mood rows from a previous version may still contain their old excerpts. The app lets each user export data, clear their transcript, remove mood scores, edit/delete memories, or delete their account.
-
-## Environment variables reference
-
-| Variable | Service | Purpose |
-| --- | --- | --- |
-| `DATABASE_URL` | API | Neon PostgreSQL URI; required on Render |
-| `GEMINI_API_KEY` | API | Authenticates Gemini generation calls |
-| `GEMINI_MODEL` | API | Gemini model identifier |
-| `JWT_SECRET_KEY` | API | Signs access tokens; private random value, minimum 32 characters |
-| `UDAY_REQUIRE_DATABASE` | API | `1` on Render to require persistent PostgreSQL |
-| `UDAY_API_URL` | UI | FastAPI base URL; linked automatically by the Blueprint |
-
-For local development, create a `.env` file in the project folder. Never commit that file. The values below are placeholders; replace them with your own credentials and a newly generated JWT key:
-
-```dotenv
-GEMINI_API_KEY=your_gemini_key
-GEMINI_MODEL=gemini-3.5-flash
-JWT_SECRET_KEY=generate-a-random-secret-of-at-least-32-characters
-DATABASE_URL=postgresql://user:password@host/database?sslmode=require
+```text
+Browser
+  └── Streamlit UI (streamlit_app.py)
+        └── FastAPI API (api.py)
+              ├── Google Gemini (chat generation)
+              ├── SQLAlchemy → Neon PostgreSQL / local SQLite
+              ├── VADER (heuristic sentiment scoring)
+              └── GAD-7 screening and crisis phrase safeguard
 ```
 
-Generate a local JWT secret with:
+The Render Blueprint provisions two web services: `uday-ui` and `uday-api`. The UI reaches the API through `UDAY_API_URL`. User accounts, screening state, chat history, memories, and mood scores are stored by the API in the configured database.
 
-```bash
-python -c "import secrets; print(secrets.token_urlsafe(48))"
-```
+## Technology
 
-If `DATABASE_URL` is omitted locally, UDAY uses SQLite at `data/uday.db`. The hosted Blueprint requires Neon PostgreSQL.
+| Area | Technology |
+| --- | --- |
+| Web interface | Streamlit |
+| API and input validation | FastAPI, Pydantic |
+| Authentication | OAuth2 password flow, JWT, Argon2 password hashing |
+| Database access | SQLAlchemy |
+| Hosted database | Neon PostgreSQL |
+| Local database option | SQLite |
+| Generative responses | Google Gemini API (`google-genai`) |
+| Sentiment heuristic | NLTK VADER |
+| Hosting configuration | Render Blueprint (`render.yaml`) |
 
-## Local checks
+## Run locally
 
-Install project dependencies and the VADER lexicon:
+### 1. Prerequisites
 
-```bash
+- Python 3.11 or newer
+- A Gemini API key
+- A PostgreSQL database URL for persistent local data, or use SQLite for a local-only run
+
+### 2. Create an environment and install dependencies
+
+PowerShell:
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python -m nltk.downloader vader_lexicon
 ```
 
-Run the deployment-focused checks. They use temporary SQLite databases and do not connect to Neon:
+If PowerShell blocks virtual-environment activation, use the Python executable directly at `.venv\Scripts\python.exe` and `.venv\Scripts\streamlit.exe`.
 
-```bash
-python -m unittest discover -s tests -v
+### 3. Configure environment variables
+
+Create a `.env` file in the project root. Keep it private and never commit it.
+
+```dotenv
+GEMINI_API_KEY=replace-with-your-gemini-key
+GEMINI_MODEL=gemini-3.6-flash
+JWT_SECRET_KEY=replace-with-a-random-secret-of-at-least-32-characters
+# Optional for local development. If omitted, UDAY uses data/uday.db.
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require
 ```
 
-To start the API and UI locally, use two terminals:
+Generate a strong local JWT secret with:
 
-```bash
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Do not copy production credentials into source files, screenshots, or public issues. The model name above is the configured default; confirm that the model is available to the Google account associated with your API key.
+
+### 4. Start the services
+
+Open two PowerShell terminals from the project directory and activate `.venv` in each.
+
+Terminal 1 — API:
+
+```powershell
 uvicorn api:app --reload
 ```
 
-```bash
+Terminal 2 — UI:
+
+```powershell
 streamlit run streamlit_app.py
 ```
 
-The local UI calls `http://127.0.0.1:8000` by default. Set `UDAY_API_URL` if your API runs elsewhere. FastAPI docs are at `http://127.0.0.1:8000/docs`.
+Open the Streamlit URL printed in the terminal (usually `http://localhost:8501`). The API health check is at `http://127.0.0.1:8000/health`; interactive API documentation is at `http://127.0.0.1:8000/docs`.
 
-## Privacy and safety
+If the API runs at a different address, set `UDAY_API_URL` for the Streamlit process, for example:
 
-UDAY stores profile details, Argon2 password hashes, chat history, user-reviewed memory facts, and VADER sentiment scores in the configured database. The chat text and relevant reviewed memory facts are sent to Google Gemini to generate replies. Review the in-app data-use notice and Google's current data terms before using real personal information.
+```powershell
+$env:UDAY_API_URL = "http://127.0.0.1:8000"
+```
 
-VADER scores are basic language heuristics, not clinical measurements. GAD-7 output is a screening result, not a diagnosis. The crisis phrase detector is a lightweight safeguard that can miss or misread context; it is not a risk assessment. Review crisis resources for each country and have qualified clinical, privacy, and security reviewers assess UDAY before making it publicly available for mental-health support. In an emergency, contact local emergency services rather than relying on this app.
+## Configuration
 
-## Project files
+| Variable | Required | Used by | Description |
+| --- | --- | --- | --- |
+| `GEMINI_API_KEY` | Yes for chat | API | Credential for Gemini generation. |
+| `GEMINI_MODEL` | No | API | Gemini model identifier; defaults to the value in `config.py`. |
+| `JWT_SECRET_KEY` | Yes for deployment | API | Secret used to sign JWT access tokens; use a private random value of at least 32 characters. |
+| `DATABASE_URL` | Yes on Render | API | SQLAlchemy connection URL for PostgreSQL. When omitted locally, SQLite is used at `data/uday.db`. |
+| `UDAY_REQUIRE_DATABASE` | Set to `1` on Render | API | Makes startup require a database URL, Gemini key, and strong JWT secret. |
+| `UDAY_API_URL` | Yes for hosted UI | UI | Public base URL of the FastAPI service. Render wires this automatically in the Blueprint. |
 
-- `render.yaml` — Render Blueprint for the API and Streamlit services
-- `api.py` — FastAPI routes, input validation, JWT authentication, screening, and data controls
-- `streamlit_app.py` — Streamlit UI, sign-in, chat, memories, and privacy controls
-- `database.py` — SQLAlchemy schema, SQLite/PostgreSQL connections, and additive upgrades
-- `chatbot.py` — Gemini chat, VADER mood scoring, and conversational context
-- `memory.py` — user-reviewed memories and local relevance ranking
-- `crisis.py` — crisis phrase safeguard and response
-- `screener.py` — GAD-7 screening flow
-- `users.py` — profile persistence
-- `config.py` — environment configuration and model selection
-- `tests/test_deployment.py` — deployment-focused API tests
-- `evaluate_personalization.py` — synthetic memory-personalization comparison
+For PostgreSQL, use the connection URI supplied by Neon and retain its SSL and connection parameters. Use a separate database or Neon branch for development and testing. UDAY initializes its tables at startup and applies additive schema updates; still back up data before changing a production database.
+
+## Deploy to Render
+
+The repository includes a `render.yaml` Blueprint defining the `uday-api` and `uday-ui` web services.
+
+### Before deploying
+
+1. Push the project, including `render.yaml`, to the GitHub repository and branch Render should deploy.
+2. Create a Neon PostgreSQL project and copy its connection URI. Use the pooled connection for the hosted application when available.
+3. Create a Gemini API key and confirm the configured model is available to that key.
+4. Check that `.env`, database files, virtual environments, and API keys are not tracked by Git.
+
+### Create the Render services
+
+1. In the Render Dashboard, choose **New** → **Blueprint**.
+2. Connect the GitHub repository containing UDAY and select the deployment branch.
+3. Confirm Render detects the root `render.yaml`.
+4. Provide the prompted `DATABASE_URL` and `GEMINI_API_KEY` values. The Blueprint generates `JWT_SECRET_KEY`.
+5. Review the two services and deploy the Blueprint.
+6. Wait for both services to finish building. Open the `uday-api` service and check `/health`, then open the public URL for `uday-ui`.
+
+### Required service settings
+
+The API service needs:
+
+- `DATABASE_URL` — Neon PostgreSQL connection URI
+- `GEMINI_API_KEY` — Gemini credential
+- `JWT_SECRET_KEY` — private generated secret (at least 32 characters)
+- `UDAY_REQUIRE_DATABASE=1`
+- `GEMINI_MODEL` — model enabled for the configured Gemini key
+
+The UI service needs `UDAY_API_URL` set to the API service’s public Render URL. The Blueprint configures this service reference. Keep the database URI and Gemini key on the API service only.
+
+After a successful deployment, verify:
+
+```text
+https://<your-api-service>.onrender.com/health
+https://<your-api-service>.onrender.com/docs
+```
+
+The health endpoint should return `{"status":"ok"}`. Then create a disposable account through the UI and test chat, screening, memory controls, and data export. Avoid real personal or health information while evaluating the prototype.
+
+### Update an existing deployment
+
+Commit and push changes to the branch connected to Render. Render will start a deployment automatically if auto-deploy is enabled. Review the build and runtime logs in the Render Dashboard. Do not use `git push --force` to work around a rejected push; reconcile the branch histories or push to the repository and branch that Render actually tracks.
+
+### Render Free plan notes
+
+The included Blueprint uses Render Free services. Free services may sleep after inactivity, can take time to wake, and have ephemeral local filesystems. UDAY therefore requires PostgreSQL for hosted data. Review Render’s current [Free instance limits](https://render.com/docs/free) before relying on this configuration. The free setup is for demos and evaluation, not a production mental-health service.
+
+## Data and privacy
+
+- UDAY stores user profile details, password hashes, chat history, screening state, user-managed memory facts, and VADER mood scores in its database.
+- Chat text and relevant saved memory facts are sent to Gemini to produce a reply. Profile fields such as name and age are not included in the Gemini prompt by the current implementation.
+- UDAY retains at most 500 recent chat messages per account. A smaller, recent portion may be included as model context.
+- New mood records store the sentiment score without the message text excerpt.
+- Users can export data, clear chat history, delete mood scores, edit or delete saved memories, and permanently delete their account and linked records.
+- Access tokens expire after 15 minutes. Rotating `JWT_SECRET_KEY` invalidates existing tokens.
+
+Review Google’s current API terms and data practices before sending personal information. Do not use UDAY for urgent support or sensitive clinical decision-making.
+
+## Verification
+
+Run the deployment-focused API tests from the project root:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+The tests use temporary SQLite databases and do not require a Neon connection. They still require the packages listed in `requirements.txt` to be installed in the active Python environment. To check Python syntax without starting the services:
+
+```powershell
+python -m compileall -q api.py streamlit_app.py tests
+```
+
+## Project layout
+
+```text
+api.py                     FastAPI routes, validation, authentication, chat, and data controls
+streamlit_app.py           Streamlit interface
+chatbot.py                 Gemini chat generation and VADER mood scoring
+database.py                SQLAlchemy models, connections, and schema initialization
+memory.py                  User-managed memory facts and relevance selection
+screener.py                GAD-7 screening conversation
+crisis.py                  Lightweight urgent-language phrase safeguard
+users.py                   User profile operations
+config.py                  Environment loading and deployment configuration
+render.yaml                Render Blueprint for the API and UI services
+tests/test_deployment.py   Deployment-focused API tests
+evaluate_personalization.py Synthetic personalization evaluation utility
+```
+
+## Known limitations
+
+- Anxiety/stress screening suggestions use a small keyword list. They can miss relevant messages or trigger on terms used casually; they are not an assessment of a person’s mental state.
+- The crisis safeguard also uses phrase matching and is not a substitute for trained review or emergency services.
+- VADER is a general-purpose sentiment heuristic and does not reliably interpret clinical context, sarcasm, or every language.
+- Gemini availability, model identifiers, quotas, and pricing can change. Check Google’s current Gemini documentation and account settings before deployment.
+- Render Free services may sleep and have resource limits. Use a properly secured, monitored hosting and data-protection setup before serving real users.
