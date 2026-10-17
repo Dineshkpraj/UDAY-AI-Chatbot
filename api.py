@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from chatbot import Chatbot
 from config import get_gemini_api_key, load_dotenv_file, validate_deployment_environment
-from database import (initialize_database, load_chat_history, get_screening_state,
+from database import (initialize_database, load_chat_history, save_chat_history, get_screening_state,
                       save_screening_state, bump_rate_limit, delete_user_data,
                       get_mood_logs, delete_mood_logs, get_session_factory, ChatHistory, ScreeningState)
 from memory import MemoryManager
@@ -78,6 +78,11 @@ password_hash = PasswordHash.recommended()
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_MINUTES = 15
 PRIVACY_NOTICE_VERSION = "1.0"
+SCREENING_SUGGESTION_TERMS = (
+    "anxious", "anxiety", "panic", "panicking", "overwhelmed", "overwhelm",
+    "stressed", "stressful", "worry", "worried", "worrying", "nervous",
+    "on edge", "restless", "can't relax", "cannot relax", "trouble relaxing",
+)
 
 
 @lru_cache(maxsize=1)
@@ -204,11 +209,11 @@ def chat(
     enforce_rate_limit(http_request, f"chat:{user_key}", 30, 60, include_ip=False)
 
     try:
+        state = get_screening_state(email)
         crisis_response = CrisisManager().check_for_crisis(request.message)
         if crisis_response:
-            save_screening_state(email, {})
+            save_screening_state(email, {"invited": bool(state.get("invited")), "active": False})
             return ChatResponse(response=crisis_response)
-        state = get_screening_state(email)
         screener = Screener()
         if state.get("active"):
             screener.is_active = True
@@ -216,20 +221,97 @@ def chat(
             screener.total_score = int(state.get("total_score", 0))
             answer = screener.process_input(request.message)
             if screener.is_active:
-                save_screening_state(email, {"active": True, "question_index": screener.question_index,
+                save_screening_state(email, {"invited": bool(state.get("invited")), "active": True, "question_index": screener.question_index,
                                              "total_score": screener.total_score})
             else:
-                save_screening_state(email, {})
+                save_screening_state(email, {"invited": bool(state.get("invited")), "active": False})
+            _append_chat_turn(email, request.message, answer)
             return ChatResponse(response=answer)
-        if "screening" in request.message.lower():
+        normalized_message = request.message.strip().lower()
+        affirmative = normalized_message in {"yes", "y", "sure", "okay", "ok", "start", "let's do it"}
+        decline = normalized_message in {"no", "n", "not now", "skip", "no thanks"}
+        if state.get("invited") and decline:
+            answer = "No problem. We can chat normally whenever you like."
+            _append_chat_turn(email, request.message, answer)
+            return ChatResponse(response=answer)
+        if "screening" in normalized_message or (state.get("invited") and affirmative):
             answer = screener.start_screening()
-            save_screening_state(email, {"active": True, "question_index": 0, "total_score": 0})
+            save_screening_state(email, {"invited": True, "active": True, "question_index": 0, "total_score": 0})
+            _append_chat_turn(email, request.message, answer)
             return ChatResponse(response=answer)
         bot = Chatbot(get_api_key(), email, profile)
-        return ChatResponse(response=bot.get_response(request.message))
+        answer = bot.get_response(request.message)
+        if _should_suggest_screening(request.message):
+            suggestion = (
+                "\n\nIt sounds like you may be dealing with some anxiety or stress. "
+                "If you’d like, you can take the optional GAD-7 screening now. "
+                "Reply ‘Yes’ to begin or ‘No’ to continue chatting. It is not a diagnosis."
+            )
+            answer += suggestion
+            save_screening_state(email, {"invited": True, "active": False})
+            _append_to_last_assistant_message(email, suggestion)
+        return ChatResponse(response=answer)
     except RuntimeError as error:
         raise HTTPException(status_code=503,
                             detail="The AI service is temporarily unavailable. Please try again shortly.") from error
+
+
+def _append_chat_turn(email: str, user_text: str, assistant_text: str):
+    history = load_chat_history(email)
+    history.extend([
+        {"role": "user", "parts": [user_text]},
+        {"role": "model", "parts": [assistant_text]},
+    ])
+    save_chat_history(email, history)
+
+
+def _append_to_last_assistant_message(email: str, suffix: str):
+    """Persist a screening offer on the assistant turn already saved by Chatbot."""
+    history = load_chat_history(email)
+    for message in reversed(history):
+        if message.get("role") == "model":
+            parts = message.setdefault("parts", [])
+            if parts and isinstance(parts[-1], str):
+                parts[-1] += suffix
+            else:
+                parts.append(suffix)
+            save_chat_history(email, history)
+            return
+
+
+def _should_suggest_screening(message: str) -> bool:
+    """Use a small transparent vocabulary for non-urgent distress signals."""
+    normalized = " ".join(message.lower().split())
+    return any(term in normalized for term in SCREENING_SUGGESTION_TERMS)
+
+
+@app.post("/screening/invitation")
+def screening_invitation(current_user: Annotated[tuple[str, dict], Depends(get_current_user)]):
+    """Offer the optional GAD-7 screening once, on a new user's first visit."""
+    email, _ = current_user
+    state = get_screening_state(email)
+    if state.get("invited") or load_chat_history(email):
+        return {"message": None}
+
+    invitation = (
+        "Would you like to take a brief, optional GAD-7 anxiety screening? "
+        "It asks 7 questions about the past two weeks. Reply ‘Yes’ to start or ‘No’ to skip. "
+        "It is a screening tool, not a diagnosis."
+    )
+    save_screening_state(email, {"invited": True, "active": False})
+    save_chat_history(email, [{"role": "model", "parts": [invitation]}])
+    return {"message": invitation}
+
+
+@app.post("/screening/start")
+def start_screening(current_user: Annotated[tuple[str, dict], Depends(get_current_user)]):
+    """Start or restart the optional GAD-7 screening on the user's request."""
+    email, _ = current_user
+    screener = Screener()
+    answer = screener.start_screening()
+    save_screening_state(email, {"invited": True, "active": True, "question_index": 0, "total_score": 0})
+    _append_chat_turn(email, "Start GAD-7 screening", answer)
+    return {"response": answer}
 
 
 @app.get("/history")

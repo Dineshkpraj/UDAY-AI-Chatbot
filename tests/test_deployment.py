@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import httpx
 
 import api
-from database import get_engine, get_session_factory, initialize_database
+from database import get_engine, get_session_factory, initialize_database, save_chat_history
 
 
 class DeploymentApiTests(unittest.IsolatedAsyncioTestCase):
@@ -70,6 +70,65 @@ class DeploymentApiTests(unittest.IsolatedAsyncioTestCase):
         second = await self.client.post("/chat", headers=headers, json={"message": "2"})
         self.assertEqual(second.status_code, 200)
         self.assertIn("Question 2", second.json()["response"])
+
+    async def test_new_user_gets_one_optional_invitation_and_yes_starts_screening(self):
+        await self.register()
+        headers = {"Authorization": "Bearer " + await self.token()}
+        first = await self.client.post("/screening/invitation", headers=headers)
+        self.assertIn("optional GAD-7", first.json()["message"])
+        repeated = await self.client.post("/screening/invitation", headers=headers)
+        self.assertIsNone(repeated.json()["message"])
+
+        started = await self.client.post("/chat", headers=headers, json={"message": "Yes"})
+        self.assertIn("Question 1", started.json()["response"])
+        history = (await self.client.get("/history", headers=headers)).json()["messages"]
+        self.assertEqual(history[-2]["content"], "Yes")
+        self.assertIn("Question 1", history[-1]["content"])
+
+    async def test_new_user_can_decline_invitation_and_continue_normally(self):
+        await self.register()
+        headers = {"Authorization": "Bearer " + await self.token()}
+        await self.client.post("/screening/invitation", headers=headers)
+        declined = await self.client.post("/chat", headers=headers, json={"message": "No"})
+        self.assertIn("No problem", declined.json()["response"])
+        self.assertIsNone((await self.client.post("/screening/invitation", headers=headers)).json()["message"])
+
+    async def test_any_user_can_start_or_restart_screening_on_demand(self):
+        await self.register()
+        headers = {"Authorization": "Bearer " + await self.token()}
+        # Existing chat history must not prevent a user-requested screening.
+        with patch("api.Chatbot") as chatbot:
+            chatbot.return_value.get_response.return_value = "Here is a supportive reply."
+            await self.client.post("/chat", headers=headers, json={"message": "Hello"})
+        started = await self.client.post("/screening/start", headers=headers)
+        self.assertEqual(started.status_code, 200)
+        self.assertIn("Question 1", started.json()["response"])
+        await self.client.post("/chat", headers=headers, json={"message": "2"})
+        restarted = await self.client.post("/screening/start", headers=headers)
+        self.assertIn("Question 1", restarted.json()["response"])
+
+    async def test_distress_language_gets_optional_screening_suggestion(self):
+        await self.register()
+        headers = {"Authorization": "Bearer " + await self.token()}
+
+        def reply_and_persist(*_args):
+            save_chat_history(self.email, [
+                {"role": "user", "parts": ["I feel anxious and overwhelmed lately."]},
+                {"role": "model", "parts": ["I’m sorry things feel difficult."]},
+            ])
+            return "I’m sorry things feel difficult."
+
+        with patch("api.Chatbot") as chatbot:
+            chatbot.return_value.get_response.side_effect = reply_and_persist
+            response = await self.client.post("/chat", headers=headers, json={
+                "message": "I feel anxious and overwhelmed lately."
+            })
+        self.assertIn("optional GAD-7 screening", response.json()["response"])
+        history = (await self.client.get("/history", headers=headers)).json()["messages"]
+        self.assertIn("Reply ‘Yes’ to begin", history[-1]["content"])
+
+        started = await self.client.post("/chat", headers=headers, json={"message": "Yes"})
+        self.assertIn("Question 1", started.json()["response"])
 
     async def test_gemini_failure_is_not_reported_as_a_successful_chat(self):
         await self.register()

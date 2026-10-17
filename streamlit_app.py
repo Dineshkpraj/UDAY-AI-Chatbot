@@ -231,6 +231,9 @@ def login(email, password):
     if response is not None:
         st.session_state.token = response.json()["access_token"]
         st.session_state.email = email.strip().lower()
+        # The API persists a first-visit screening invitation, so it appears in
+        # the chat transcript once and is not repeated on refresh/sign-in.
+        api_request("POST", "/screening/invitation", token=st.session_state.token)
         history = api_request("GET", "/history", token=st.session_state.token)
         st.session_state.messages = history.json().get("messages", []) if history is not None else []
         st.session_state.pop("memories", None)
@@ -304,6 +307,15 @@ def render_chat():
             for key in ("token", "email", "messages", "memories"):
                 st.session_state.pop(key, None)
             st.rerun()
+        if st.button("Start / restart GAD-7 screening", type="primary", use_container_width=True):
+            screening = api_request("POST", "/screening/start", token=st.session_state.token)
+            if screening is not None:
+                st.session_state.messages.extend([
+                    {"role": "user", "content": "Start GAD-7 screening"},
+                    {"role": "assistant", "content": screening.json().get("response", "")},
+                ])
+                st.rerun()
+        st.caption("You can start or restart the optional screening whenever you want.")
         st.divider()
         st.subheader("Your data")
         export_response = api_request("GET", "/export", token=st.session_state.token)
